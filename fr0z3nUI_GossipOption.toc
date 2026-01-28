@@ -1,0 +1,27 @@
+## Interface: 120000
+# Interface helper (in-game): /run print("TOC interface =", select(4, GetBuildInfo()))
+## Title: |cff00ccfffr0z3nUI|r GossipOption
+## Notes: Auto-selects configured gossip options. UI: /fgo
+## Author: fr0z3nights
+## Version: 2026.01.25
+## SavedVariables: AutoGossip_Acc, AutoGossip_Settings, AutoGossip_UI
+## SavedVariablesPerCharacter: AutoGossip_Char, AutoGossip_CharSettings
+
+fr0z3nUI_GossipOptionXP12.lua
+fr0z3nUI_GossipOptionXP11.lua
+fr0z3nUI_GossipOptionXP10.lua
+fr0z3nUI_GossipOptionXP09.lua
+fr0z3nUI_GossipOptionXP08.lua
+fr0z3nUI_GossipOptionXP07.lua
+fr0z3nUI_GossipOptionXP06.lua
+fr0z3nUI_GossipOptionXP05.lua
+fr0z3nUI_GossipOptionXP04.lua
+fr0z3nUI_GossipOptionXP03.lua
+fr0z3nUI_GossipOptionXP02.lua
+fr0z3nUI_GossipOptionXP01.lua
+fr0z3nUI_GossipOptionXPEV.lua
+
+fr0z3nUI_GossipOptionTutorial.lua
+fr0z3nUI_GossipOptionTooltip.lua
+
+fr0z3nUI_GossipOption.lua
