@@ -4,6 +4,13 @@ ns = ns or {}
 local lastSelectAt = 0
 local frame = CreateFrame("Frame")
 
+local queueOverlayButton = nil
+local queueOverlayHint = nil
+local queueOverlayPendingHide = false
+local queueOverlayWatchdogElapsed = 0
+
+local HideQueueOverlay
+
 local function Print(msg)
     print("|cff00ccff[FGO]|r " .. tostring(msg))
 end
@@ -88,6 +95,20 @@ local function InitSV()
     if type(AutoGossip_Settings.debugAcc) ~= "boolean" then
         AutoGossip_Settings.debugAcc = false
     end
+
+    -- Queue accept overlay: 3-state UX via two SVs.
+    -- - Acc On: queueAcceptAcc=true,  queueAcceptMode="acc"
+    -- - On:     queueAcceptAcc=false, queueAcceptMode="on"
+    -- - Off:    queueAcceptAcc=false, queueAcceptMode="acc" (inherit)
+    if type(AutoGossip_Settings.queueAcceptAcc) ~= "boolean" then
+        AutoGossip_Settings.queueAcceptAcc = true
+    end
+    if type(AutoGossip_CharSettings.queueAcceptMode) ~= "string" then
+        AutoGossip_CharSettings.queueAcceptMode = "acc"
+    end
+    if AutoGossip_CharSettings.queueAcceptMode ~= "acc" and AutoGossip_CharSettings.queueAcceptMode ~= "on" then
+        AutoGossip_CharSettings.queueAcceptMode = "acc"
+    end
     if type(AutoGossip_CharSettings.disabled) ~= "table" then
         AutoGossip_CharSettings.disabled = {}
     end
@@ -96,6 +117,228 @@ local function InitSV()
     AutoGossip_Settings.disabled = MigrateDisabledFlatToNested(AutoGossip_Settings.disabled)
     AutoGossip_Settings.disabledDB = MigrateDisabledFlatToNested(AutoGossip_Settings.disabledDB)
     AutoGossip_CharSettings.disabled = MigrateDisabledFlatToNested(AutoGossip_CharSettings.disabled)
+end
+
+local function GetQueueAcceptState()
+    InitSV()
+    if AutoGossip_Settings and AutoGossip_Settings.queueAcceptAcc then
+        return "acc"
+    end
+    if AutoGossip_CharSettings and AutoGossip_CharSettings.queueAcceptMode == "on" then
+        return "char"
+    end
+    return "off"
+end
+
+local function SetQueueAcceptState(state)
+    InitSV()
+    if state == "acc" then
+        AutoGossip_Settings.queueAcceptAcc = true
+        AutoGossip_CharSettings.queueAcceptMode = "acc"
+        return
+    end
+    if state == "char" then
+        AutoGossip_Settings.queueAcceptAcc = false
+        AutoGossip_CharSettings.queueAcceptMode = "on"
+        return
+    end
+    AutoGossip_Settings.queueAcceptAcc = false
+    AutoGossip_CharSettings.queueAcceptMode = "acc"
+end
+
+local function IsQueueAcceptEnabled()
+    return GetQueueAcceptState() ~= "off"
+end
+
+local function HasActiveLfgProposal()
+    if type(GetLFGProposal) == "function" then
+        local proposalExists = GetLFGProposal()
+        return proposalExists and true or false
+    end
+
+    local dialog = _G and _G["LFGDungeonReadyDialog"]
+    if dialog and dialog.IsShown and dialog:IsShown() then
+        return true
+    end
+    local popup = _G and _G["LFGDungeonReadyPopup"]
+    if popup and popup.IsShown and popup:IsShown() then
+        return true
+    end
+    return false
+end
+
+local function FindLfgAcceptButton()
+    local candidates = {
+        _G and _G["LFGDungeonReadyDialogEnterDungeonButton"],
+        _G and _G["LFGDungeonReadyDialogAcceptButton"],
+        _G and _G["LFGDungeonReadyPopupAcceptButton"],
+        _G and _G["LFGDungeonReadyPopupEnterDungeonButton"],
+    }
+
+    for _, btn in ipairs(candidates) do
+        if btn and btn.IsShown and btn:IsShown() and btn.IsEnabled and btn:IsEnabled() then
+            return btn
+        end
+    end
+    for _, btn in ipairs(candidates) do
+        if btn and btn.IsShown and btn:IsShown() then
+            return btn
+        end
+    end
+    return nil
+end
+
+local function EnsureQueueOverlay()
+    if queueOverlayButton then
+        return queueOverlayButton
+    end
+
+    local b = CreateFrame("Button", "AutoGossipQueueAcceptOverlay", UIParent, "SecureActionButtonTemplate")
+    queueOverlayButton = b
+
+    b:SetAllPoints(UIParent)
+    b:SetFrameStrata("BACKGROUND")
+    b:SetFrameLevel(1)
+    b:EnableMouse(true)
+    b:RegisterForClicks("AnyUp")
+
+    -- Configure secure attributes once to avoid tainting Blizzard action buttons.
+    -- Using a macro here means we don't need to call :SetAttribute() again at runtime.
+    b:SetAttribute("type1", "macro")
+    b:SetAttribute("macrotext", table.concat({
+        "/click LFGDungeonReadyDialogEnterDungeonButton",
+        "/click LFGDungeonReadyDialogAcceptButton",
+        "/click LFGDungeonReadyPopupAcceptButton",
+        "/click LFGDungeonReadyPopupEnterDungeonButton",
+    }, "\n"))
+
+    b:SetScript("OnUpdate", function(self, elapsed)
+        if not (self and self.IsShown and self:IsShown()) then
+            return
+        end
+
+        queueOverlayWatchdogElapsed = (queueOverlayWatchdogElapsed or 0) + (elapsed or 0)
+        if queueOverlayWatchdogElapsed < 0.20 then
+            return
+        end
+        queueOverlayWatchdogElapsed = 0
+
+        if not IsQueueAcceptEnabled() then
+            HideQueueOverlay()
+            return
+        end
+        if not HasActiveLfgProposal() then
+            HideQueueOverlay()
+            return
+        end
+
+        local acceptButton = FindLfgAcceptButton()
+        if not acceptButton then
+            HideQueueOverlay()
+            return
+        end
+    end)
+    b:Hide()
+
+    local hint = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    queueOverlayHint = hint
+    hint:SetAllPoints(UIParent)
+    hint:SetFrameStrata("FULLSCREEN_DIALOG")
+    hint:EnableMouse(false)
+
+    hint:SetBackdrop({
+        bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    hint:SetBackdropColor(0, 0, 0, 0.35)
+    hint:SetBackdropBorderColor(1, 0.82, 0, 0.95)
+
+    local fs = hint:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fs:SetPoint("TOP", UIParent, "TOP", 0, -140)
+    fs:SetText("|cff00ccff[FGO]|r Queue ready — click the world to accept")
+    hint.text = fs
+
+    do
+        local ag = hint:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+
+        local a1 = ag:CreateAnimation("Alpha")
+        a1:SetFromAlpha(0.15)
+        a1:SetToAlpha(1.0)
+        a1:SetDuration(0.35)
+        a1:SetSmoothing("OUT")
+
+        local a2 = ag:CreateAnimation("Alpha")
+        a2:SetFromAlpha(1.0)
+        a2:SetToAlpha(0.15)
+        a2:SetDuration(0.35)
+        a2:SetSmoothing("IN")
+        a2:SetOrder(2)
+
+        hint.flash = ag
+    end
+
+    hint:Hide()
+
+    return b
+end
+
+HideQueueOverlay = function()
+    if not (queueOverlayButton and queueOverlayButton.IsShown and queueOverlayButton:IsShown()) then
+        queueOverlayPendingHide = false
+        if queueOverlayHint and queueOverlayHint.Hide then
+            queueOverlayHint:Hide()
+        end
+        return
+    end
+
+    if InCombatLockdown and InCombatLockdown() then
+        queueOverlayPendingHide = true
+        return
+    end
+
+    queueOverlayButton:Hide()
+    if queueOverlayHint and queueOverlayHint.flash and queueOverlayHint.flash.IsPlaying and queueOverlayHint.flash:IsPlaying() then
+        queueOverlayHint.flash:Stop()
+    end
+    if queueOverlayHint and queueOverlayHint.Hide then
+        queueOverlayHint:Hide()
+    end
+    queueOverlayPendingHide = false
+end
+
+local function ShowQueueOverlayIfNeeded()
+    if not IsQueueAcceptEnabled() then
+        HideQueueOverlay()
+        return
+    end
+    if not HasActiveLfgProposal() then
+        HideQueueOverlay()
+        return
+    end
+
+    if InCombatLockdown and InCombatLockdown() then
+        return
+    end
+
+    local acceptButton = FindLfgAcceptButton()
+    if not acceptButton then
+        HideQueueOverlay()
+        return
+    end
+
+    local overlay = EnsureQueueOverlay()
+    overlay:Show()
+    if queueOverlayHint and queueOverlayHint.Show then
+        queueOverlayHint:Show()
+        if queueOverlayHint.flash and queueOverlayHint.flash.Play then
+            queueOverlayHint.flash:Play()
+        end
+    end
 end
 
 local function GetNpcIDFromGuid(guid)
@@ -1638,9 +1881,55 @@ local function CreateOptionsWindow()
 
         UpdateBorderButton()
 
+        local btnQueueAccept = CreateFrame("Button", nil, togglesPanel, "UIPanelButtonTemplate")
+        btnQueueAccept:SetSize(BTN_W, BTN_H)
+        btnQueueAccept:SetPoint("TOP", btnBorder, "BOTTOM", 0, -GAP_Y)
+        f.btnQueueAccept = btnQueueAccept
+
+        local function UpdateQueueAcceptButton()
+            local state = GetQueueAcceptState()
+            if state == "acc" then
+                btnQueueAccept:SetText("Queue Accept: |cff00ccffACC ON|r")
+            elseif state == "char" then
+                btnQueueAccept:SetText("Queue Accept: |cff00ccffON|r")
+            else
+                btnQueueAccept:SetText("Queue Accept: |cffff0000OFF|r")
+            end
+        end
+
+        btnQueueAccept:SetScript("OnClick", function()
+            local state = GetQueueAcceptState()
+            if state == "acc" then
+                SetQueueAcceptState("char")
+            elseif state == "char" then
+                SetQueueAcceptState("off")
+            else
+                SetQueueAcceptState("acc")
+            end
+            UpdateQueueAcceptButton()
+            ShowQueueOverlayIfNeeded()
+        end)
+        btnQueueAccept:SetScript("OnEnter", function()
+            if GameTooltip then
+                GameTooltip:SetOwner(btnQueueAccept, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Queue Accept")
+                GameTooltip:AddLine("ACC ON: enable for all characters.", 1, 1, 1, true)
+                GameTooltip:AddLine("ON: enable only this character.", 1, 1, 1, true)
+                GameTooltip:AddLine("OFF: disable.", 1, 1, 1, true)
+                GameTooltip:AddLine("When a dungeon queue pops, clicking the world will accept.", 1, 1, 1, true)
+                GameTooltip:AddLine("Clicks on other UI should not accept.", 1, 1, 1, true)
+                GameTooltip:Show()
+            end
+        end)
+        btnQueueAccept:SetScript("OnLeave", function()
+            if GameTooltip then GameTooltip:Hide() end
+        end)
+
+        UpdateQueueAcceptButton()
+
         local btnDebug = CreateFrame("Button", nil, togglesPanel, "UIPanelButtonTemplate")
         btnDebug:SetSize(BTN_W, BTN_H)
-        btnDebug:SetPoint("TOP", btnBorder, "BOTTOM", 0, -GAP_Y)
+        btnDebug:SetPoint("TOP", btnQueueAccept, "BOTTOM", 0, -GAP_Y)
         f.btnDebug = btnDebug
 
         local function UpdateDebugButton()
@@ -1671,6 +1960,7 @@ local function CreateOptionsWindow()
         f.UpdateToggleButtons = function()
             UpdateTutorialButton()
             UpdateBorderButton()
+            UpdateQueueAcceptButton()
             UpdateDebugButton()
         end
     end
@@ -1722,23 +2012,65 @@ local function PrintCurrentOptions()
     end
 end
 
+local lastDebugPrintAt = 0
+local lastDebugPrintKey = nil
+
 local function PrintDebugOptionsOnShow()
     if not (C_GossipInfo and C_GossipInfo.GetOptions) then
         return
     end
 
+    local options = C_GossipInfo.GetOptions() or {}
+    if #options == 0 then
+        return
+    end
+
     local npcID = GetCurrentNpcID()
     local npcName = GetCurrentNpcName() or ""
+
+    -- Debounce: both GOSSIP_SHOW and PLAYER_INTERACTION_MANAGER_FRAME_SHOW can fire for the
+    -- same interaction, which would otherwise print the same block twice.
+    do
+        local ids = {}
+        for _, opt in ipairs(options) do
+            local optionID = opt and opt.gossipOptionID
+            if optionID then
+                ids[#ids + 1] = optionID
+            end
+        end
+        table.sort(ids)
+        local key = tostring(npcID or "?") .. ":" .. tostring(#options) .. ":" .. table.concat(ids, ",")
+
+        local now = (GetTime and GetTime()) or 0
+        if lastDebugPrintKey == key and (now - (lastDebugPrintAt or 0)) < 0.20 then
+            return
+        end
+        lastDebugPrintKey = key
+        lastDebugPrintAt = now
+    end
+
+    -- Don't print debug if we'd auto-select for this NPC/options.
+    if npcID and (not IsShiftKeyDown()) and (not InCombatLockdown()) then
+        for _, opt in ipairs(options) do
+            local optionID = opt and opt.gossipOptionID
+            if optionID then
+                if HasRule("char", npcID, optionID) and (not IsDisabled("char", npcID, optionID)) then
+                    return
+                end
+                if HasRule("acc", npcID, optionID) and (not IsDisabled("acc", npcID, optionID)) then
+                    return
+                end
+                if HasDbRule(npcID, optionID) and (not IsDisabledDB(npcID, optionID)) then
+                    return
+                end
+            end
+        end
+    end
+
     if npcID then
         Print(string.format("%d: %s", npcID, npcName))
     else
         Print(string.format("?: %s", npcName))
-    end
-
-    local options = C_GossipInfo.GetOptions() or {}
-    if #options == 0 then
-        Print("Options: (none)")
-        return
     end
 
     for _, opt in ipairs(options) do
@@ -1779,9 +2111,33 @@ end
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("GOSSIP_SHOW")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
+frame:RegisterEvent("LFG_PROPOSAL_SHOW")
+frame:RegisterEvent("LFG_PROPOSAL_UPDATE")
+frame:RegisterEvent("LFG_PROPOSAL_FAILED")
+frame:RegisterEvent("LFG_PROPOSAL_SUCCEEDED")
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == addonName then
         InitSV()
+        return
+    end
+
+    if event == "PLAYER_REGEN_ENABLED" then
+        InitSV()
+        if queueOverlayPendingHide then
+            HideQueueOverlay()
+        end
+        ShowQueueOverlayIfNeeded()
+        return
+    end
+
+    if event == "LFG_PROPOSAL_SHOW" or event == "LFG_PROPOSAL_UPDATE" then
+        InitSV()
+        ShowQueueOverlayIfNeeded()
+        return
+    end
+    if event == "LFG_PROPOSAL_FAILED" or event == "LFG_PROPOSAL_SUCCEEDED" then
+        HideQueueOverlay()
         return
     end
 
