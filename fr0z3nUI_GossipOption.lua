@@ -2000,12 +2000,19 @@ local function PrintCurrentOptions()
         Print("Gossip API not available")
         return
     end
+
+    local options = C_GossipInfo.GetOptions() or {}
+    -- If there's only one option, the addon will auto-select it anyway; avoid chat spam.
+    if #options <= 1 then
+        return
+    end
+
     local npcID = GetCurrentNpcID()
     local npcName = GetCurrentNpcName() or ""
     if npcID then
         Print(string.format("NPC: %s (%d)", npcName, npcID))
     end
-    for _, opt in ipairs(C_GossipInfo.GetOptions() or {}) do
+    for _, opt in ipairs(options) do
         if opt and opt.gossipOptionID then
             Print(string.format("OptionID %d: %s", opt.gossipOptionID, opt.name or ""))
         end
@@ -2021,7 +2028,7 @@ local function PrintDebugOptionsOnShow()
     end
 
     local options = C_GossipInfo.GetOptions() or {}
-    if #options == 0 then
+    if #options <= 1 then
         return
     end
 
