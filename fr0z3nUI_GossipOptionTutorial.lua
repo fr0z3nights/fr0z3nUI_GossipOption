@@ -7,8 +7,6 @@ local pendingChanges
 
 local IsAddOnLoadedSafe = (_G.C_AddOns and rawget(_G.C_AddOns, "IsAddOnLoaded")) or rawget(_G, "IsAddOnLoaded")
 
-local originalMainMenuMicroButton_AreAlertsEnabled
-
 local function GetTutorialEnabledEffective()
     local acc = _G.AutoGossip_Settings
     if type(acc) == "table" and type(acc.tutorialEnabledAcc) == "boolean" then
@@ -27,31 +25,12 @@ local function GetTutorialOffEffective()
     return not GetTutorialEnabledEffective()
 end
 
-local function EnsureOrigMicroAlertsSaved()
-    if originalMainMenuMicroButton_AreAlertsEnabled == nil then
-        local fn = _G and rawget(_G, "MainMenuMicroButton_AreAlertsEnabled")
-        if type(fn) == "function" then
-            originalMainMenuMicroButton_AreAlertsEnabled = fn
-        end
-    end
-end
-
 local function ApplyMicroAlertsHook()
-    EnsureOrigMicroAlertsSaved()
-    if type(originalMainMenuMicroButton_AreAlertsEnabled) ~= "function" then
-        return
-    end
-
-    if GetTutorialOffEffective() then
-        if IsAddOnLoadedSafe and IsAddOnLoadedSafe("HideTalentAlert") then
-            return
-        end
-        _G.MainMenuMicroButton_AreAlertsEnabled = function()
-            return false
-        end
-    else
-        _G.MainMenuMicroButton_AreAlertsEnabled = originalMainMenuMicroButton_AreAlertsEnabled
-    end
+    -- Intentionally a no-op.
+    -- Overwriting Blizzard globals (like MainMenuMicroButton_AreAlertsEnabled) is a common source of UI taint
+    -- and can lead to blocked protected calls inside Blizzard_ActionBarController.
+    -- The tutorial suppression in this addon relies on CVars instead.
+    return
 end
 
 local function ApplyHideTutorials(force)

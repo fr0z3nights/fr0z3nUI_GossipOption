@@ -8,8 +8,28 @@ local queueOverlayButton = nil
 local queueOverlayHint = nil
 local queueOverlayPendingHide = false
 local queueOverlayWatchdogElapsed = 0
+local queueOverlaySuppressUntil = 0
+local queueOverlayProposalToken = 0
+local queueOverlayDismissedToken = 0
 
 local HideQueueOverlay
+
+local function SuppressQueueOverlay(seconds)
+    local now = (GetTime and GetTime()) or 0
+    local untilTime = now + (seconds or 0)
+    if untilTime > (queueOverlaySuppressUntil or 0) then
+        queueOverlaySuppressUntil = untilTime
+    end
+    HideQueueOverlay()
+end
+
+local function DismissQueueOverlayForCurrentProposal()
+    -- Dismiss until the current proposal ends (or a new one starts).
+    if (queueOverlayProposalToken or 0) > 0 then
+        queueOverlayDismissedToken = queueOverlayProposalToken
+    end
+    HideQueueOverlay()
+end
 
 local function Print(msg)
     print("|cff00ccff[FGO]|r " .. tostring(msg))
@@ -180,11 +200,6 @@ local function FindLfgAcceptButton()
             return btn
         end
     end
-    for _, btn in ipairs(candidates) do
-        if btn and btn.IsShown and btn:IsShown() then
-            return btn
-        end
-    end
     return nil
 end
 
@@ -211,6 +226,19 @@ local function EnsureQueueOverlay()
         "/click LFGDungeonReadyPopupAcceptButton",
         "/click LFGDungeonReadyPopupEnterDungeonButton",
     }, "\n"))
+
+    -- PostClick runs after the secure macro has executed.
+    -- - Left click: accept, then dismiss overlay for this proposal.
+    -- - Right click: dismiss overlay for this proposal.
+    b:SetScript("PostClick", function(_, mouseButton)
+        if mouseButton == "RightButton" then
+            DismissQueueOverlayForCurrentProposal()
+            return
+        end
+
+        -- After accepting, keep hidden until this invite ends.
+        DismissQueueOverlayForCurrentProposal()
+    end)
 
     b:SetScript("OnUpdate", function(self, elapsed)
         if not (self and self.IsShown and self:IsShown()) then
@@ -259,7 +287,7 @@ local function EnsureQueueOverlay()
 
     local fs = hint:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     fs:SetPoint("TOP", UIParent, "TOP", 0, -140)
-    fs:SetText("|cff00ccff[FGO]|r Queue ready — click the world to accept")
+    fs:SetText("|cff00ccff[FGO]|r Queue ready — left click the world to accept (right click to dismiss)")
     hint.text = fs
 
     do
@@ -312,12 +340,23 @@ HideQueueOverlay = function()
 end
 
 local function ShowQueueOverlayIfNeeded()
+    local now = (GetTime and GetTime()) or 0
+    if (queueOverlaySuppressUntil or 0) > now then
+        return
+    end
+
+    if (queueOverlayProposalToken or 0) > 0 and (queueOverlayDismissedToken or 0) == (queueOverlayProposalToken or 0) then
+        return
+    end
+
     if not IsQueueAcceptEnabled() then
         HideQueueOverlay()
         return
     end
     if not HasActiveLfgProposal() then
         HideQueueOverlay()
+        queueOverlayProposalToken = 0
+        queueOverlayDismissedToken = 0
         return
     end
 
@@ -2138,12 +2177,28 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         return
     end
 
-    if event == "LFG_PROPOSAL_SHOW" or event == "LFG_PROPOSAL_UPDATE" then
+    if event == "LFG_PROPOSAL_SHOW" then
+        -- Start a new proposal session.
+        queueOverlayProposalToken = (queueOverlayProposalToken or 0) + 1
+        queueOverlayDismissedToken = 0
+        InitSV()
+        ShowQueueOverlayIfNeeded()
+        return
+    end
+
+    if event == "LFG_PROPOSAL_UPDATE" then
+        -- Some edge cases (e.g., /reload mid-proposal) may not fire SHOW again.
+        if (queueOverlayProposalToken or 0) == 0 and HasActiveLfgProposal() then
+            queueOverlayProposalToken = 1
+            queueOverlayDismissedToken = 0
+        end
         InitSV()
         ShowQueueOverlayIfNeeded()
         return
     end
     if event == "LFG_PROPOSAL_FAILED" or event == "LFG_PROPOSAL_SUCCEEDED" then
+        queueOverlayProposalToken = 0
+        queueOverlayDismissedToken = 0
         HideQueueOverlay()
         return
     end
