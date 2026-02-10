@@ -1,4 +1,4 @@
-## Interface: 120000
+## Interface: 120001
 # Interface helper (in-game): /run print("TOC interface =", select(4, GetBuildInfo()))
 ## Title: |cff00ccfffr0z3nUI|r GossipOption
 ## Notes: Auto-selects configured gossip options. UI: /fgo
