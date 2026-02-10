@@ -2062,6 +2062,21 @@ local lastDebugPrintAt = 0
 local lastDebugPrintKey = nil
 
 local function PrintDebugOptionsOnShow()
+    InitSV()
+
+    -- Don't print debug on characters that already have at least one character-scoped rule.
+    -- (Keeps chat clean on established characters; still prints for fresh characters.)
+    do
+        local db = AutoGossip_Char
+        if type(db) == "table" then
+            for _, npcTable in pairs(db) do
+                if type(npcTable) == "table" and next(npcTable) ~= nil then
+                    return
+                end
+            end
+        end
+    end
+
     if not (C_GossipInfo and C_GossipInfo.GetOptions) then
         return
     end
