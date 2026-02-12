@@ -8,7 +8,7 @@ local pendingChanges
 local IsAddOnLoadedSafe = (_G.C_AddOns and rawget(_G.C_AddOns, "IsAddOnLoaded")) or rawget(_G, "IsAddOnLoaded")
 
 local function GetTutorialEnabledEffective()
-    local acc = _G.AutoGossip_Settings
+    local acc = rawget(_G, "AutoGossip_Settings")
     if type(acc) == "table" and type(acc.tutorialEnabledAcc) == "boolean" then
         return acc.tutorialEnabledAcc
     end
@@ -117,9 +117,10 @@ end
 local function OnEvent(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == addonName then
         local tocVersion = select(4, _G.GetBuildInfo())
-        if type(_G.AutoGossip_Settings) == "table" and GetTutorialOffEffective() then
-            if (not _G.AutoGossip_Settings.tutorialBuild) or (_G.AutoGossip_Settings.tutorialBuild < tocVersion) then
-                _G.AutoGossip_Settings.tutorialBuild = tocVersion
+        local acc = rawget(_G, "AutoGossip_Settings")
+        if type(acc) == "table" and GetTutorialOffEffective() then
+            if (not acc.tutorialBuild) or (acc.tutorialBuild < tocVersion) then
+                acc.tutorialBuild = tocVersion
                 pendingChanges = true
             end
         end

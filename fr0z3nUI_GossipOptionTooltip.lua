@@ -5,7 +5,7 @@ ns = ns or {}
 local didInit = false
 
 local function IsHideEnabled()
-    local acc = _G.AutoGossip_Settings
+    local acc = rawget(_G, "AutoGossip_Settings")
     if type(acc) ~= "table" then
         return true
     end
