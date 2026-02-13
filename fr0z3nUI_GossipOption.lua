@@ -115,6 +115,9 @@ local function InitSV()
     if type(AutoGossip_Settings.debugAcc) ~= "boolean" then
         AutoGossip_Settings.debugAcc = false
     end
+    if type(AutoGossip_Settings.debugPetPopupsAcc) ~= "boolean" then
+        AutoGossip_Settings.debugPetPopupsAcc = false
+    end
 
     -- Queue accept overlay: 3-state UX via two SVs.
     -- - Acc On: queueAcceptAcc=true,  queueAcceptMode="acc"
@@ -188,6 +191,79 @@ local function InitSV()
 
     MigrateRulesDb(AutoGossip_Acc)
     MigrateRulesDb(AutoGossip_Char)
+end
+
+-- Pet battle popup debug (Pandaria): logs which StaticPopup is shown during pet battle start.
+local petBattleOpenStartAt = 0
+local petBattleOpenStartInPandaria = false
+
+local function IsInPandaria()
+    if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo) then
+        return false
+    end
+    local mapID = C_Map.GetBestMapForUnit("player")
+    local safety = 0
+    while mapID and safety < 20 do
+        if mapID == 424 then
+            return true
+        end
+        local info = C_Map.GetMapInfo(mapID)
+        mapID = info and info.parentMapID or nil
+        safety = safety + 1
+    end
+    return false
+end
+
+local function GetShortStack(skip)
+    if not debugstack then
+        return ""
+    end
+    local raw = debugstack((skip or 0) + 1, 12, 12) or ""
+    local out = {}
+    local n = 0
+    for line in raw:gmatch("[^\n]+") do
+        -- Skip the first line which is usually just "debugstack" itself.
+        if not line:find("GetShortStack", 1, true) and not line:find("debugstack", 1, true) then
+            n = n + 1
+            out[#out + 1] = line
+            if n >= 4 then
+                break
+            end
+        end
+    end
+    return table.concat(out, " | ")
+end
+
+local petPopupDebugHooked = false
+local function SetupPetPopupDebug()
+    if petPopupDebugHooked then
+        return
+    end
+    petPopupDebugHooked = true
+
+    if hooksecurefunc and StaticPopup_Show then
+        hooksecurefunc("StaticPopup_Show", function(which, text_arg1, text_arg2)
+            InitSV()
+            if not (AutoGossip_Settings and AutoGossip_Settings.debugPetPopupsAcc) then
+                return
+            end
+            if not petBattleOpenStartInPandaria then
+                return
+            end
+            if not GetTime or (GetTime() - (petBattleOpenStartAt or 0)) > 10 then
+                return
+            end
+
+            local whichStr = which and tostring(which) or "(nil)"
+            local a1 = text_arg1 and tostring(text_arg1) or ""
+            local a2 = text_arg2 and tostring(text_arg2) or ""
+            local stack = GetShortStack(2)
+            Print(string.format("PetBattle popup: %s | a1=%s | a2=%s", whichStr, a1, a2))
+            if stack ~= "" then
+                Print("PetBattle popup stack: " .. stack)
+            end
+        end)
+    end
 end
 
 local function GetQueueAcceptState()
@@ -2876,11 +2952,43 @@ local function CreateOptionsWindow()
 
         UpdateDebugButton()
 
+        local btnPetPopupDebug = CreateFrame("Button", nil, togglesPanel, "UIPanelButtonTemplate")
+        btnPetPopupDebug:SetSize(BTN_W, BTN_H)
+        btnPetPopupDebug:SetPoint("TOP", btnDebug, "BOTTOM", 0, -GAP_Y)
+        f.btnPetPopupDebug = btnPetPopupDebug
+
+        local function UpdatePetPopupDebugButton()
+            InitSV()
+            local on = (AutoGossip_Settings and AutoGossip_Settings.debugPetPopupsAcc) and true or false
+            SetAcc2StateText(btnPetPopupDebug, "Pet Popup Debug", on)
+        end
+
+        btnPetPopupDebug:SetScript("OnClick", function()
+            InitSV()
+            AutoGossip_Settings.debugPetPopupsAcc = not (AutoGossip_Settings.debugPetPopupsAcc and true or false)
+            UpdatePetPopupDebugButton()
+        end)
+        btnPetPopupDebug:SetScript("OnEnter", function()
+            if GameTooltip then
+                GameTooltip:SetOwner(btnPetPopupDebug, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Pet Popup Debug")
+                GameTooltip:AddLine("ON ACC: when a pet battle starts in Pandaria, log any StaticPopup shown.", 1, 1, 1, true)
+                GameTooltip:AddLine("Helps identify which popup is appearing.", 1, 1, 1, true)
+                GameTooltip:Show()
+            end
+        end)
+        btnPetPopupDebug:SetScript("OnLeave", function()
+            if GameTooltip then GameTooltip:Hide() end
+        end)
+
+        UpdatePetPopupDebugButton()
+
         f.UpdateToggleButtons = function()
             UpdateTutorialButton()
             UpdateBorderButton()
             UpdateQueueAcceptButton()
             UpdateDebugButton()
+            UpdatePetPopupDebugButton()
         end
     end
 
@@ -3073,10 +3181,25 @@ frame:RegisterEvent("LFG_PROPOSAL_UPDATE")
 frame:RegisterEvent("LFG_PROPOSAL_FAILED")
 frame:RegisterEvent("LFG_PROPOSAL_SUCCEEDED")
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+frame:RegisterEvent("PET_BATTLE_OPENING_START")
+frame:RegisterEvent("PET_BATTLE_CLOSE")
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == addonName then
         InitSV()
         DeduplicateUserRulesAgainstDb()
+        SetupPetPopupDebug()
+        return
+    end
+
+    if event == "PET_BATTLE_OPENING_START" then
+        InitSV()
+        petBattleOpenStartAt = GetTime and GetTime() or 0
+        petBattleOpenStartInPandaria = IsInPandaria()
+        return
+    end
+    if event == "PET_BATTLE_CLOSE" then
+        petBattleOpenStartAt = 0
+        petBattleOpenStartInPandaria = false
         return
     end
 
