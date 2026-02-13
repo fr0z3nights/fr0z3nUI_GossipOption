@@ -2890,6 +2890,12 @@ local function CreateOptionsWindow()
         f._editFontsBumped = true
     end
 
+    -- Creation tab (Edit/Add): NPCID line extra bump (+5pt).
+    if f.reasonLabel and not f._npcIdFontBumped then
+        BumpFont(f.reasonLabel, 5)
+        f._npcIdFontBumped = true
+    end
+
     -- Default tab
     if f.SelectTab then
         f:SelectTab(1)
